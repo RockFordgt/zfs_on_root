@@ -89,7 +89,7 @@ export SWAPSIZE
 # Start installation
 initialize() {
   apt update
-  apt install -y debootstrap gdisk zfsutils-linux vim git curl nala
+  apt install -y debootstrap gdisk zfsutils-linux vim git curl neovim-qt aptitude
   zgenhostid -f ${GENHOSTID}
 }
 
@@ -147,7 +147,16 @@ zfs_pool_create() {
   zfs create -o mountpoint=none "${POOLNAME}"/ROOT
   sync
   sleep 2
-  zfs create -o mountpoint=/ -o canmount=noauto "${POOLNAME}"/ROOT/"${ID}"
+  zfs create -o mountpoint=/ \
+      -o canmount=noauto \
+      -o com.ubuntu.zsys:bootfs=yes \
+      -o com.ubuntu.zsys:last-used=$(date +%s) "${POOLNAME}"/ROOT/"${ID}"
+  zfs create -o canmount=off \
+      -o com.ubuntu.zsys:bootfs=no ${POOLNAME}/ROOT/"${ID}"/var
+  zfs create "${POOLNAME}"/ROOT/"${ID}"/var/lib/AccountService
+  zfs create "${POOLNAME}"/ROOT/"${ID}"/var/lib/NetworkManager
+  zfs create "${POOLNAME}"/ROOT/"${ID}"/var/lib/docker
+
   zfs create -o mountpoint=/home "${POOLNAME}"/home
   sync
   zpool set bootfs="${POOLNAME}"/ROOT/"${ID}" "${POOLNAME}"
@@ -173,7 +182,9 @@ zfs_pool_create() {
 # Install Ubuntu
 ubuntu_debootstrap() {
   echo "------------> Debootstrap Ubuntu ${RELEASE} <------------"
-  debootstrap ${RELEASE} "${MOUNTPOINT}"
+  debootstrap ${RELEASE} "${MOUNTPOINT}" https://txos.tuxedocomputers.com/ubuntu
+  mkdir -p "${MOUNTPOINT}"/etc/zfs
+  cp /etc/zfs/zpool.cache "${MOUNTPOINT}"/etc/zfs
 
   # Copy files into the new install
   cp /etc/hostid "${MOUNTPOINT}"/etc/hostid
@@ -221,7 +232,7 @@ EOCHROOT
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
   ${APT} update
   ${APT} upgrade -y
-  ${APT} install -y --no-install-recommends linux-generic locales keyboard-configuration console-setup curl git
+  ${APT} install -y --no-install-recommends linux-generic locales keyboard-configuration console-setup curl git aptitude
 EOCHROOT
 
   chroot "$MOUNTPOINT" /bin/bash -x <<-EOCHROOT
@@ -238,7 +249,7 @@ EOCHROOT
 
   # ZFS Configuration
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
-  ${APT} install -y dosfstools zfs-initramfs zfsutils-linux curl vim wget git
+  ${APT} install -y tuxedo-archive-keyring dosfstools zfs-initramfs zfsutils-linux curl vim wget git
   systemctl enable zfs.target
   systemctl enable zfs-import-cache
   systemctl enable zfs-mount
@@ -248,12 +259,12 @@ EOCHROOT
 EOCHROOT
 }
 
-ZBM_install() {
+grub_install() {
   # Install and configure ZFSBootMenu
   # Set ZFSBootMenu properties on datasets
   # Create a vfat filesystem
   # Create an fstab entry and mount
-  echo "------------> Installing ZFSBootMenu <------------"
+  echo "------------> Installing GRUB<------------"
   cat <<EOF >>${MOUNTPOINT}/etc/fstab
 $(blkid | grep -E "${DISK}(p)?${BOOT_PART}" | cut -d ' ' -f 2) /boot/efi vfat defaults 0 0
 EOF
@@ -270,13 +281,32 @@ EOF
 EOCHROOT
 
   # Install ZBM and configure EFI boot entries
+#  chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
+#  mount /boot/efi
+#  mkdir -p /boot/efi/EFI/ZBM
+#  curl -o /boot/efi/EFI/ZBM/VMLINUZ.EFI -L https://get.zfsbootmenu.org/efi
+#  cp /boot/efi/EFI/ZBM/VMLINUZ.EFI /boot/efi/EFI/ZBM/VMLINUZ-BACKUP.EFI
+#  mount -t efivarfs efivarfs /sys/firmware/efi/efivars
+#EOCHROOT
+  # Install grub and configure EFI boot entries
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
   mount /boot/efi
-  mkdir -p /boot/efi/EFI/ZBM
-  curl -o /boot/efi/EFI/ZBM/VMLINUZ.EFI -L https://get.zfsbootmenu.org/efi
-  cp /boot/efi/EFI/ZBM/VMLINUZ.EFI /boot/efi/EFI/ZBM/VMLINUZ-BACKUP.EFI
+  mkdir -p /boot/efi/grub /boot/grub
+  echo /boot/efi/grub /boot/grub none defaults,bind 0 0 >> /etc/fstab
+  mount /boot/grub
   mount -t efivarfs efivarfs /sys/firmware/efi/efivars
+
+  ${APT} install --yes grub-efi-amd64 grub-efi-amd64-signed linux-image-tuxedo-22.04 shim-signed zfs-initramfs zsys
+  
+  echo "-- grub-probe /boot --"
+  grub-probe /boot
+  update-initramfs -c -k all
+  sed -e "s/\(GRUB_CMDLINE_LINUX_DEFAULT=\)'\(.*\)'/\1'\2 init_on_alloc=0'/" -i /etc/default/grub
+  update-grub
+  grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+    --bootloader-id=tuxedo --recheck --no-floppy
 EOCHROOT
+
 }
 
 # Create boot entry with efibootmgr
@@ -383,6 +413,12 @@ groups_and_networks() {
   echo "  version: 2" >>/etc/netplan/01-network-manager-all.yaml
   echo "  renderer: NetworkManager" >>/etc/netplan/01-network-manager-all.yaml
 EOCHROOT
+  mkdir -p "${MOUNTPOINT}"/etc/NetworkManager/conf.d/
+  mkdir -p "${MOUNTPOINT}"/etc/NetworkManager/system-connections/
+  cp -R /etc/NetworkManager/conf.d/* "${MOUNTPOINT}"/etc/NetworkManager/conf.d/
+  cp -f /etc/NetworkManager/NetworkManager.conf "${MOUNTPOINT}"/etc/NetworkManager/
+  cp -R /etc/NetworkManager/system-connections/* "${MOUNTPOINT}"/etc/NetworkManager/system-connections/
+  cp -R /var/lib/NetworkManager/* "${MOUNTPOINT}"/var/lib/NetworkManager/
 }
 
 # Create user
@@ -418,7 +454,28 @@ install_ubuntu() {
 		desktop)
 		##Ubuntu default desktop install has a full GUI environment.
 		##Minimal install: ubuntu-desktop-minimal
-			${APT} install -y tuxedoos-desktop
+			${APT} install -y \
+                tuxedoos-desktop \
+                kwin-wayland \
+                neovim-qt \
+                ripgrep \
+                fd-find \
+                ubuntu-standard \
+                sddm-theme-tuxedo \
+                tuxedo-base-files \
+                tuxedo-common-settings \
+                tuxedo-control-center \
+                tuxedo-dgpu-run \
+                tuxedo-drivers \
+                tuxedo-grub-theme \
+                tuxedo-neofetch \
+                tuxedo-plymouth-label \
+                tuxedo-plymouth-theme-spinner \
+                tuxedo-theme-plasma \
+                tuxedo-tomte \
+                tuxedo-ufw-profiles \
+                tuxedo-wallpapers-2404 \
+                tuxedo-webfai-creator
 		;;
     *)
     echo "No distro selected."
@@ -505,9 +562,9 @@ disk_prepare
 zfs_pool_create
 ubuntu_debootstrap
 create_swap
-ZBM_install
-EFI_install
-rEFInd_install
+grub_install
+#EFI_install
+#rEFInd_install
 groups_and_networks
 create_user
 install_ubuntu
