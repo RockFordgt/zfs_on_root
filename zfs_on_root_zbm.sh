@@ -48,6 +48,7 @@ git_check() {
 
 debug_me() {
   if [[ ${DEBUG} =~ "true" ]]; then
+    echo "EFI_DEVICE : ${EFI_DEVICE}"
     echo "BOOT_DEVICE: ${BOOT_DEVICE}"
     echo "SWAP_DEVICE: ${SWAP_DEVICE}"
     echo "POOL_DEVICE: ${POOL_DEVICE}"
@@ -68,16 +69,21 @@ debug_me() {
 
 source /etc/os-release
 export ID
+export EFI_DISK="${DISKID}"
+export EFI_PART="1"
+export EFI_DEVICE="${EFI_DISK}-part${EFI_PART}"
+
 export BOOT_DISK="${DISKID}"
-export BOOT_PART="1"
+export BOOT_PART="2"
 export BOOT_DEVICE="${BOOT_DISK}-part${BOOT_PART}"
 
+
 export SWAP_DISK="${DISKID}"
-export SWAP_PART="2"
+export SWAP_PART="3"
 export SWAP_DEVICE="${SWAP_DISK}-part${SWAP_PART}"
 
 export POOL_DISK="${DISKID}"
-export POOL_PART="3"
+export POOL_PART="4"
 export POOL_DEVICE="${POOL_DISK}-part${POOL_PART}"
 
 debug_me
@@ -108,7 +114,7 @@ disk_prepare() {
 
   ## gdisk hex codes:
   ## EF02 BIOS boot partitions
-  ## EF00 EFI system
+  ## EF00 EFI s ystem
   ## BE00 Solaris boot
   ## BF00 Solaris root
   ## BF01 Solaris /usr & Mac Z
@@ -116,7 +122,8 @@ disk_prepare() {
   ## 8300 Linux file system
   ## FD00 Linux RAID
 
-  sgdisk -n "${BOOT_PART}:1m:+512m" -t "${BOOT_PART}:EF00" "${BOOT_DISK}"
+  sgdisk -n "${EFI_PART}:1m:+512m" -t "${EFI_PART}:EF00" "${EFI_DISK}"
+  sgdisk -n "${BOOT_PART}:0:+3G" -t "${EFI_PART}:8300" "${BOOT_DISK}"
   sgdisk -n "${SWAP_PART}:0:${SWAPSIZE}" -t "${SWAP_PART}:8200" "${SWAP_DISK}"
   sgdisk -n "${POOL_PART}:0:-10m" -t "${POOL_PART}:BF00" "${POOL_DISK}"
   sync
@@ -285,18 +292,23 @@ grub_install() {
   # Set ZFSBootMenu properties on datasets
   # Create a vfat filesystem
   # Create an fstab entry and mount
+  echo "------------> prepare /boot/<------------"
+  mkfs.ext4 "$BOOT_DEVICE" 
+  cat <<EOF >>${MOUNTPOINT}/etc/fstab
+$(blkid | grep -E "${DISK}(p)?${BOOT_PART}" | cut -d ' ' -f 2) /boot ext4 0 2
+EOF
   echo "------------> Installing GRUB<------------"
   cat <<EOF >>${MOUNTPOINT}/etc/fstab
-$(blkid | grep -E "${DISK}(p)?${BOOT_PART}" | cut -d ' ' -f 2) /boot/efi vfat defaults 0 0
+$(blkid | grep -E "${DISK}(p)?${EFI_PART}" | cut -d ' ' -f 2) /boot/efi vfat defaults 0 0
 EOF
 
-  mkdir -p "${MOUNTPOINT}"/boot/efi
+  #mkdir -p "${MOUNTPOINT}"/boot/efi
 
   debug_me
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
   zfs set org.zfsbootmenu:commandline="quiet loglevel=4 splash" "${POOLNAME}"/ROOT
   zfs set org.zfsbootmenu:keysource="${POOLNAME}"/ROOT/"${ID}" "${POOLNAME}"
-  mkfs.vfat -v -F32 "$BOOT_DEVICE" # the EFI partition must be formatted as FAT32
+  mkfs.vfat -v -F32 "$EFI_DEVICE" # the EFI partition must be formatted as FAT32
   sync
   sleep 2
 EOCHROOT
@@ -311,6 +323,7 @@ EOCHROOT
 #EOCHROOT
   # Install grub and configure EFI boot entries
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
+  mount /boot/
   mount /boot/efi
   mkdir -p /boot/efi/grub /boot/grub
   echo /boot/efi/grub /boot/grub none defaults,bind 0 0 >> /etc/fstab
@@ -322,13 +335,14 @@ EOCHROOT
   echo "-- grub-probe /boot --"
   grub-probe /boot
   update-initramfs -c -k all
-  sed -e "s/\(GRUB_CMDLINE_LINUX_DEFAULT=\)'\(.*\)'/\1'\2 init_on_alloc=0'/" -i /etc/default/grub
+  sed -e "s/\(GRUB_CMDLINE_LINUX_DEFAULT=\)\"\(.*\)\"/\1'\2 init_on_alloc=0'/" -i /etc/default/grub
   update-grub
   grub-install --target=x86_64-efi --efi-directory=/boot/efi \
     --bootloader-id=tuxedo --recheck --no-floppy
 EOCHROOT
 
   echo "^^^^^ ${FUNCNAME} ^^^^^"
+  read -rp "Hit enter to continue"
 }
 
 # Create boot entry with efibootmgr
@@ -338,11 +352,11 @@ EFI_install() {
   debug_me
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
 ${APT} install -y efibootmgr
-efibootmgr -c -d "$DISK" -p "$BOOT_PART" \
+efibootmgr -c -d "$DISK" -p "$EFI_PART" \
   -L "ZFSBootMenu (Backup)" \
   -l '\EFI\ZBM\VMLINUZ-BACKUP.EFI'
 
-efibootmgr -c -d "$DISK" -p "$BOOT_PART" \
+efibootmgr -c -d "$DISK" -p "$EFI_PART" \
   -L "ZFSBootMenu" \
   -l '\EFI\ZBM\VMLINUZ.EFI'
 
