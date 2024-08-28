@@ -88,13 +88,16 @@ export SWAPSIZE
 
 # Start installation
 initialize() {
+  echo "----- ${FUNCNAME} -----"
   apt update
   apt install -y debootstrap gdisk zfsutils-linux vim git curl neovim-qt aptitude
   zgenhostid -f ${GENHOSTID}
+  echo "^^^^^ ${FUNCNAME} ^^^^^"
 }
 
 # Disk preparation
 disk_prepare() {
+  echo "----- ${FUNCNAME} -----"
   debug_me
 
   wipefs -a "${DISKID}"
@@ -119,10 +122,12 @@ disk_prepare() {
   sync
   sleep 2
   debug_me
+  echo "^^^^^ ${FUNCNAME} ^^^^^"
 }
 
 # ZFS pool creation
 zfs_pool_create() {
+  echo "----- ${FUNCNAME} -----"
   # Create the zpool
   echo "------------> Create zpool <------------"
   echo "${PASSPHRASE}" >/etc/zfs/"${POOLNAME}".key
@@ -151,11 +156,14 @@ zfs_pool_create() {
       -o canmount=noauto \
       -o com.ubuntu.zsys:bootfs=yes \
       -o com.ubuntu.zsys:last-used=$(date +%s) "${POOLNAME}"/ROOT/"${ID}"
+
   zfs create -o canmount=off \
       -o com.ubuntu.zsys:bootfs=no ${POOLNAME}/ROOT/"${ID}"/var
+  zfs create "${POOLNAME}"/ROOT/"${ID}"/var/lib
   zfs create "${POOLNAME}"/ROOT/"${ID}"/var/lib/AccountService
   zfs create "${POOLNAME}"/ROOT/"${ID}"/var/lib/NetworkManager
   zfs create "${POOLNAME}"/ROOT/"${ID}"/var/lib/docker
+
 
   zfs create -o mountpoint=/home "${POOLNAME}"/home
   sync
@@ -174,25 +182,32 @@ zfs_pool_create() {
   zfs mount "${POOLNAME}"/ROOT/"${ID}"
   zfs mount "${POOLNAME}"/home
 
+  mkdir -p "${MOUNTPOINT}"/var/lib
+
   # Update device symlinks
   udevadm trigger
   debug_me
+  echo "^^^^^ ${FUNCNAME} ^^^^^"
 }
 
 # Install Ubuntu
 ubuntu_debootstrap() {
+  echo "----- ${FUNCNAME} -----"
   echo "------------> Debootstrap Ubuntu ${RELEASE} <------------"
-  debootstrap ${RELEASE} "${MOUNTPOINT}" https://txos.tuxedocomputers.com/ubuntu
+
+  #debootstrap --keyring=/usr/share/keyrings/tuxedo-archive-keyring.gpg ${RELEASE} "${MOUNTPOINT}" https://deb.tuxedocomputers.com/ubuntu
+  debootstrap ${RELEASE} "${MOUNTPOINT}" https://mirrors.tuxedocomputers.com/ubuntu/mirror/archive.ubuntu.com/ubuntu
+  
   mkdir -p "${MOUNTPOINT}"/etc/zfs
   cp /etc/zfs/zpool.cache "${MOUNTPOINT}"/etc/zfs
 
   # Copy files into the new install
   cp /etc/hostid "${MOUNTPOINT}"/etc/hostid
   cp /etc/resolv.conf "${MOUNTPOINT}"/etc/
-  mkdir "${MOUNTPOINT}"/etc/zfs
   cp /etc/zfs/"${POOLNAME}".key "${MOUNTPOINT}"/etc/zfs
 
   # Chroot into the new OS
+
   mount -t proc proc "${MOUNTPOINT}"/proc
   mount -t sysfs sys "${MOUNTPOINT}"/sys
   mount -B /dev "${MOUNTPOINT}"/dev
@@ -209,6 +224,9 @@ EOCHROOT
 
   # Set up APT sources
   #mkdir -p ${MOUNTPOINT}/etc/apt/sources.list.d
+
+  cp /usr/share/keyrings/tuxedo-archive-keyring.gpg "${MOUNTPOINT}"/etc/apt/trusted.gpg.d/
+  cp /usr/share/keyrings/neon.asc "${MOUNTPOINT}"/etc/apt/trusted.gpg.d/
   cp /etc/apt/sources.list ${MOUNTPOINT}/etc/apt/sources.list
   cp /etc/apt/sources.list.d/* ${MOUNTPOINT}/etc/apt/sources.list.d
 #  cat <<EOF >"${MOUNTPOINT}"/etc/apt/sources.list
@@ -249,7 +267,8 @@ EOCHROOT
 
   # ZFS Configuration
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
-  ${APT} install -y tuxedo-archive-keyring dosfstools zfs-initramfs zfsutils-linux curl vim wget git
+  ${APT} install -y tuxedo-archive-keyring
+  ${APT} install -y dosfstools zfs-initramfs zfsutils-linux curl vim wget git
   systemctl enable zfs.target
   systemctl enable zfs-import-cache
   systemctl enable zfs-mount
@@ -257,9 +276,11 @@ EOCHROOT
   echo "UMASK=0077" > /etc/initramfs-tools/conf.d/umask.conf
   update-initramfs -c -k all
 EOCHROOT
+  echo "^^^^^ ${FUNCNAME} ^^^^^"
 }
 
 grub_install() {
+  echo "----- ${FUNCNAME} -----"
   # Install and configure ZFSBootMenu
   # Set ZFSBootMenu properties on datasets
   # Create a vfat filesystem
@@ -307,10 +328,12 @@ EOCHROOT
     --bootloader-id=tuxedo --recheck --no-floppy
 EOCHROOT
 
+  echo "^^^^^ ${FUNCNAME} ^^^^^"
 }
 
 # Create boot entry with efibootmgr
 EFI_install() {
+  echo "----- ${FUNCNAME} -----"
   echo "------------> Installing efibootmgr <------------"
   debug_me
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
@@ -327,10 +350,12 @@ sync
 sleep 1
 debug_me
 EOCHROOT
+  echo "^^^^^ ${FUNCNAME} ^^^^^"
 }
 
 # Install rEFInd
 rEFInd_install() {
+  echo "----- ${FUNCNAME} -----"
   echo "------------> Install rEFInd <-------------"
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
   ${APT} install -y curl
@@ -384,21 +409,25 @@ EOF
   if [[ ${DEBUG} =~ "true" ]]; then
     read -rp "Finished w/ rEFInd... waiting."
   fi
+  echo "^^^^^ ${FUNCNAME} ^^^^^"
 }
 
 # Setup swap partition
 
 create_swap() {
+  echo "----- ${FUNCNAME} -----"
   echo "------------> Create swap partition <------------"
 
   debug_me
   echo swap "${DISKID}"-part2 /dev/urandom \
     swap,cipher=aes-xts-plain64:sha256,size=512 >>"${MOUNTPOINT}"/etc/crypttab
   echo /dev/mapper/swap none swap defaults 0 0 >>"${MOUNTPOINT}"/etc/fstab
+  echo "^^^^^ ${FUNCNAME} ^^^^^"
 }
 
 # Create system groups and network setup
 groups_and_networks() {
+  echo "----- ${FUNCNAME} -----"
   echo "------------> Setup groups and networks <----------------"
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
   cp /usr/share/systemd/tmp.mount /etc/systemd/system/
@@ -419,10 +448,12 @@ EOCHROOT
   cp -f /etc/NetworkManager/NetworkManager.conf "${MOUNTPOINT}"/etc/NetworkManager/
   cp -R /etc/NetworkManager/system-connections/* "${MOUNTPOINT}"/etc/NetworkManager/system-connections/
   cp -R /var/lib/NetworkManager/* "${MOUNTPOINT}"/var/lib/NetworkManager/
+  echo "^^^^^ ${FUNCNAME} ^^^^^"
 }
 
 # Create user
 create_user() {
+  echo "----- ${FUNCNAME} -----"
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
   adduser --disabled-password --gecos "" ${USERNAME}
   cp -a /etc/skel/. /home/${USERNAME}
@@ -433,10 +464,12 @@ create_user() {
   chmod 400 /etc/sudoers.d/${USERNAME}
   echo -e "${USERNAME}:$PASSWORD" | chpasswd
 EOCHROOT
+  echo "^^^^^ ${FUNCNAME} ^^^^^"
 }
 
 # Install distro bundle
 install_ubuntu() {
+  echo "----- ${FUNCNAME} -----"
   echo "------------> Installing ${DISTRO} bundle <------------"
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
     ${APT} dist-upgrade -y
@@ -506,10 +539,12 @@ install_ubuntu() {
 		# 	;;
     # esac
 EOCHROOT
+  echo "^^^^^ ${FUNCNAME} ^^^^^"
 }
 
 # Disable log gzipping as we already use compresion at filesystem level
 uncompress_logs() {
+  echo "----- ${FUNCNAME} -----"
   echo "------------> Uncompress logs <------------"
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
   for file in /etc/logrotate.d/* ; do
@@ -518,18 +553,22 @@ uncompress_logs() {
     fi
   done
 EOCHROOT
+  echo "^^^^^ ${FUNCNAME} ^^^^^"
 }
 
 # re-lock root account
 disable_root_login() {
+  echo "----- ${FUNCNAME} -----"
   echo "------------> Disable root login <------------"
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
   usermod -p '*' root
 EOCHROOT
+  echo "^^^^^ ${FUNCNAME} ^^^^^"
 }
 
 #Umount target and final cleanup
 cleanup() {
+  echo "----- ${FUNCNAME} -----"
   echo "------------> Final cleanup <------------"
   umount -n -R "${MOUNTPOINT}"
   sync
@@ -537,6 +576,7 @@ cleanup() {
   umount -n -R "${MOUNTPOINT}" >/dev/null 2>&1
 
   zpool export "${POOLNAME}"
+  echo "^^^^^ ${FUNCNAME} ^^^^^"
 }
 
 # Download and install RTL8821CE drivers
