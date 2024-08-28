@@ -1,5 +1,8 @@
 #!/bin/bash
 #
+# https://www.zaccariotto.net/post/ubuntu-23.10-zfs-zbm/
+# https://openzfs.github.io/openzfs-docs/Getting%20Started/Ubuntu/Ubuntu%2022.04%20Root%20on%20ZFS.html
+# https://github.com/dzacca/zfs_on_root/blob/master/zfs_on_root_zbm.sh
 ########################
 # Change ${RUN} to true to execute the script
 RUN="false"
@@ -295,7 +298,7 @@ grub_install() {
   echo "------------> prepare /boot/<------------"
   mkfs.ext4 "$BOOT_DEVICE" 
   cat <<EOF >>${MOUNTPOINT}/etc/fstab
-$(blkid | grep -E "${DISK}(p)?${BOOT_PART}" | cut -d ' ' -f 2) /boot ext4 0 2
+$(blkid | grep -E "${DISK}(p)?${BOOT_PART}" | cut -d ' ' -f 2) /boot ext4 defaults 0 2
 EOF
   echo "------------> Installing GRUB<------------"
   cat <<EOF >>${MOUNTPOINT}/etc/fstab
