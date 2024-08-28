@@ -6,27 +6,28 @@ RUN="false"
 
 # Variables - Populate/tweak this before launching the script
 export DISTRO="desktop"           #server, desktop
-export RELEASE="mantic"           # The short name of the release as it appears in the repository (mantic, jammy, etc)
+export RELEASE="jammy"           # The short name of the release as it appears in the repository (mantic, jammy, etc)
 export DISK="sda"                 # Enter the disk name only (sda, sdb, nvme1, etc)
 export PASSPHRASE="SomeRandomKey" # Encryption passphrase for "${POOLNAME}"
 export PASSWORD="mypassword"      # temporary root password & password for ${USERNAME}
 export HOSTNAME="myhost"          # hostname of the new machine
 export USERNAME="myuser"          # user to create in the new machine
 export MOUNTPOINT="/mnt"          # debootstrap target location
-export LOCALE="en_US.UTF-8"       # New install language setting.
-export TIMEZONE="Europe/Rome"     # New install timezone setting.
+export LOCALE="pl_PL.UTF-8"       # New install language setting.
+export TIMEZONE="Europe/Warsaw"     # New install timezone setting.
 export RTL8821CE="false"          # Download and install RTL8821CE drivers as the default ones are faulty
+export GENHOSTID=""               # Leave empty to generate some value
 
 ## Auto-reboot at the end of installation? (true/false)
 REBOOT="false"
 
 ########################################################################
 #### Enable/disable debug. Only used during the development phase.
-DEBUG="false"
+DEBUG="true"
 ########################################################################
 ########################################################################
 ########################################################################
-POOLNAME="zroot" #"${POOLNAME}" is the default name used in the HOW TO from ZFSBootMenu. You can change it to whateven you want
+POOLNAME="Pirx" #"${POOLNAME}" is the default name used in the HOW TO from ZFSBootMenu. You can change it to whateven you want
 
 if [[ ${RUN} =~ "false" ]]; then
   echo "Refusing to run as \$RUN is set to false"
@@ -89,7 +90,7 @@ export SWAPSIZE
 initialize() {
   apt update
   apt install -y debootstrap gdisk zfsutils-linux vim git curl nala
-  zgenhostid -f 0x00bab10c
+  zgenhostid -f ${GENHOSTID}
 }
 
 # Disk preparation
@@ -137,7 +138,7 @@ zfs_pool_create() {
     -O keyformat=passphrase \
     -o autotrim=on \
     -o compatibility=openzfs-2.1-linux \
-    -m none "${POOLNAME}" "$POOL_DEVICE"
+    -m none "${POOLNAME}" "${POOL_DEVICE}"
 
   sync
   sleep 2
@@ -196,28 +197,31 @@ ubuntu_debootstrap() {
 EOCHROOT
 
   # Set up APT sources
-  cat <<EOF >"${MOUNTPOINT}"/etc/apt/sources.list
-# Uncomment the deb-src entries if you need source packages
-
-deb http://archive.ubuntu.com/ubuntu/ ${RELEASE} main restricted universe multiverse
-# deb-src http://archive.ubuntu.com/ubuntu/ ${RELEASE} main restricted universe multiverse
-
-deb http://archive.ubuntu.com/ubuntu/ ${RELEASE}-updates main restricted universe multiverse
-# deb-src http://archive.ubuntu.com/ubuntu/ ${RELEASE}-updates main restricted universe multiverse
-
-deb http://archive.ubuntu.com/ubuntu/ ${RELEASE}-security main restricted universe multiverse
-# deb-src http://archive.ubuntu.com/ubuntu/ ${RELEASE}-security main restricted universe multiverse
-
-deb http://archive.ubuntu.com/ubuntu/ ${RELEASE}-backports main restricted universe multiverse
-# deb-src http://archive.ubuntu.com/ubuntu/ ${RELEASE}-backports main restricted universe multiverse
-EOF
+  #mkdir -p ${MOUNTPOINT}/etc/apt/sources.list.d
+  cp /etc/apt/sources.list ${MOUNTPOINT}/etc/apt/sources.list
+  cp /etc/apt/sources.list.d/* ${MOUNTPOINT}/etc/apt/sources.list.d
+#  cat <<EOF >"${MOUNTPOINT}"/etc/apt/sources.list
+## Uncomment the deb-src entries if you need source packages
+#
+#deb http://archive.ubuntu.com/ubuntu/ ${RELEASE} main restricted universe multiverse
+## deb-src http://archive.ubuntu.com/ubuntu/ ${RELEASE} main restricted universe multiverse
+#
+#deb http://archive.ubuntu.com/ubuntu/ ${RELEASE}-updates main restricted universe multiverse
+## deb-src http://archive.ubuntu.com/ubuntu/ ${RELEASE}-updates main restricted universe multiverse
+#
+#deb http://archive.ubuntu.com/ubuntu/ ${RELEASE}-security main restricted universe multiverse
+## deb-src http://archive.ubuntu.com/ubuntu/ ${RELEASE}-security main restricted universe multiverse
+#
+#deb http://archive.ubuntu.com/ubuntu/ ${RELEASE}-backports main restricted universe multiverse
+## deb-src http://archive.ubuntu.com/ubuntu/ ${RELEASE}-backports main restricted universe multiverse
+#EOF
 
   # Update the repository cache and system, install base packages, set up
   # console properties
   chroot "${MOUNTPOINT}" /bin/bash -x <<-EOCHROOT
   ${APT} update
   ${APT} upgrade -y
-  ${APT} install -y --no-install-recommends linux-generic locales keyboard-configuration console-setup curl nala git
+  ${APT} install -y --no-install-recommends linux-generic locales keyboard-configuration console-setup curl git
 EOCHROOT
 
   chroot "$MOUNTPOINT" /bin/bash -x <<-EOCHROOT
@@ -370,8 +374,10 @@ groups_and_networks() {
   cp /usr/share/systemd/tmp.mount /etc/systemd/system/
   systemctl enable tmp.mount
   addgroup --system lpadmin
-  addgroup --system lxd
   addgroup --system sambashare
+  addgroup --system docker
+  addgroup --system kvm
+
 
   echo "network:" >/etc/netplan/01-network-manager-all.yaml
   echo "  version: 2" >>/etc/netplan/01-network-manager-all.yaml
@@ -385,7 +391,7 @@ create_user() {
   adduser --disabled-password --gecos "" ${USERNAME}
   cp -a /etc/skel/. /home/${USERNAME}
   chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}
-  usermod -a -G adm,cdrom,dip,lpadmin,lxd,plugdev,sambashare,sudo ${USERNAME}
+  usermod -a -G adm,audio,bluetooth,cdrom,dip,docker,kvm,lpadmin,netdev,plugdev,sambashare,sudo,systemd-journal,video ${USERNAME}
   echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" >/etc/sudoers.d/${USERNAME}
   chown root:root /etc/sudoers.d/${USERNAME}
   chmod 400 /etc/sudoers.d/${USERNAME}
@@ -412,7 +418,7 @@ install_ubuntu() {
 		desktop)
 		##Ubuntu default desktop install has a full GUI environment.
 		##Minimal install: ubuntu-desktop-minimal
-			${APT} install -y ubuntu-desktop
+			${APT} install -y tuxedoos-desktop
 		;;
     *)
     echo "No distro selected."
